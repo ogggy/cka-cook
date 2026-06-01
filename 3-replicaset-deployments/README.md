@@ -608,3 +608,515 @@ restores a previous ReplicaSet revision.
 ---
 
 Understanding this hierarchy is essential for both the CKA exam and real-world Kubernetes operations.
+
+# Why Use Deployments Instead of ReplicaSets?
+
+At first glance, ReplicaSets appear to provide everything needed:
+
+* Maintain desired replica count
+* Self-healing
+* Scaling
+
+This raises a common question:
+
+```text
+Why do we need Deployments if ReplicaSets already manage Pods?
+```
+
+The answer is that Deployments are not designed to replace ReplicaSets.
+
+Instead:
+
+```text
+Deployment
+    =
+Application Release Controller
+
+ReplicaSet
+    =
+Pod Replica Controller
+```
+
+A ReplicaSet focuses on maintaining Pod replicas.
+
+A Deployment focuses on managing application releases.
+
+---
+
+## Release Management
+
+ReplicaSets only know the current desired state.
+
+Deployments maintain release history.
+
+Example:
+
+```text
+Revision 1
+nginx:1.25
+
+Revision 2
+nginx:1.26
+
+Revision 3
+nginx:1.27
+```
+
+View history:
+
+```bash
+kubectl rollout history deployment nginx
+```
+
+---
+
+## Declarative Application Lifecycle
+
+With a Deployment, you only declare the desired state:
+
+```yaml
+replicas: 3
+image: nginx:1.27
+```
+
+Kubernetes automatically determines:
+
+```text
+Current ReplicaSet
+Desired ReplicaSet
+Required Changes
+```
+
+Without Deployments, these operations must be managed manually.
+
+---
+
+## Rollout Management
+
+Deployments provide built-in rollout capabilities:
+
+```bash
+kubectl rollout status deployment nginx
+```
+
+Monitor:
+
+```text
+Updated Pods
+Ready Pods
+Available Pods
+```
+
+ReplicaSets do not provide rollout management.
+
+---
+
+## Pause and Resume Updates
+
+Pause a deployment:
+
+```bash
+kubectl rollout pause deployment nginx
+```
+
+Apply multiple changes.
+
+Resume deployment:
+
+```bash
+kubectl rollout resume deployment nginx
+```
+
+This feature is not available in ReplicaSets.
+
+---
+
+## Deployment Strategies
+
+Deployments support update strategies:
+
+```yaml
+strategy:
+  type: RollingUpdate
+```
+
+or:
+
+```yaml
+strategy:
+  type: Recreate
+```
+
+This allows controlled application upgrades.
+
+ReplicaSets do not provide deployment strategies.
+
+---
+
+## Rollbacks
+
+Deployments maintain previous ReplicaSets and can roll back easily:
+
+```bash
+kubectl rollout undo deployment nginx
+```
+
+Rollback works because Deployments preserve previous ReplicaSet revisions.
+
+ReplicaSets do not provide rollback functionality.
+
+### Good to know
+
+Every time you update a deployment (e.g., by using kubectl set to update the image), Kubernetes creates a new ReplicaSet in the background. The previous ReplicaSet's replica count is scaled down to 0, and the new ReplicaSet is scaled up to the desired number of replicas.
+
+When you perform a rollback, Kubernetes scales down the current ReplicaSet to 0 and scales up the ReplicaSet associated with the revision you're rolling back to, effectively switching the active ReplicaSet to the previous version.
+
+---
+
+## Production Reality
+
+In modern Kubernetes environments:
+
+```text
+Deployment
+↓
+ReplicaSet
+↓
+Pods
+```
+
+is the standard architecture.
+
+Most GitOps tools such as:
+
+* ArgoCD
+* Flux
+* Helm
+
+primarily manage Deployments rather than ReplicaSets directly.
+
+---
+
+## Ownership Hierarchy
+
+Deployments own ReplicaSets.
+
+ReplicaSets own Pods.
+
+```text
+Deployment
+    ↓
+ReplicaSet
+    ↓
+Pod
+```
+
+Each layer has a different responsibility.
+
+---
+
+## DBA Analogy
+
+For database professionals:
+
+```text
+Deployment
+    =
+Application Release Manager
+
+ReplicaSet
+    =
+Process Manager
+
+Pods
+    =
+Running Processes
+```
+
+ReplicaSets keep processes running.
+
+Deployments manage application versions, upgrades, rollbacks, and release history.
+
+---
+
+## Key Takeaway
+
+Do not think of Deployments as a better ReplicaSet.
+
+Instead:
+
+```text
+Deployment
+    =
+Release Management Layer
+
+ReplicaSet
+    =
+Replica Management Layer
+
+Pod
+    =
+Workload Layer
+```
+
+This separation of responsibilities is one of the most important Kubernetes architecture concepts to understand for both the CKA exam and real-world production environments.
+
+# Understanding Rollbacks vs last-applied-configuration
+
+One common source of confusion is the difference between:
+
+```text
+Deployment Revision History
+```
+
+and
+
+```text
+kubectl.kubernetes.io/last-applied-configuration
+```
+
+These are completely different mechanisms.
+
+---
+
+## Deployment Revision History
+
+Deployment revisions are created and managed by Kubernetes Deployments.
+
+Example:
+
+```text
+Revision 1
+nginx:1.25
+
+Revision 2
+nginx:1.26
+
+Revision 3
+nginx:1.27
+```
+
+View revisions:
+
+```bash
+kubectl rollout history deployment nginx
+```
+
+Rollback:
+
+```bash
+kubectl rollout undo deployment nginx
+```
+
+Deployment rollback works by activating a previous ReplicaSet revision.
+
+---
+
+## last-applied-configuration
+
+When using:
+
+```bash
+kubectl apply -f deployment.yaml
+```
+
+kubectl stores a copy of the applied manifest inside the object metadata.
+
+Example:
+
+```yaml
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: ...
+```
+
+This annotation is used by:
+
+```bash
+kubectl apply
+```
+
+to calculate future changes and perform three-way merges.
+
+---
+
+## Example Workflow
+
+Initial deployment:
+
+```yaml
+image: nginx:1.25
+```
+
+Apply:
+
+```bash
+kubectl apply -f deployment.yaml
+```
+
+State:
+
+```text
+Cluster:
+  nginx:1.25
+
+last-applied:
+  nginx:1.25
+```
+
+---
+
+Update deployment:
+
+```yaml
+image: nginx:1.26
+```
+
+Apply:
+
+```bash
+kubectl apply -f deployment.yaml
+```
+
+State:
+
+```text
+Cluster:
+  nginx:1.26
+
+last-applied:
+  nginx:1.26
+```
+
+---
+
+Rollback deployment:
+
+```bash
+kubectl rollout undo deployment nginx
+```
+
+State:
+
+```text
+Cluster:
+  nginx:1.25
+
+last-applied:
+  nginx:1.26
+```
+
+Notice that:
+
+```text
+Deployment was rolled back
+Annotation was NOT rolled back
+```
+
+This is the reason Kubernetes displays warnings such as:
+
+```text
+Rolling back will not update the
+kubectl.kubernetes.io/last-applied-configuration annotation
+```
+
+---
+
+## Why Does This Matter?
+
+After a rollback:
+
+```text
+Actual Cluster State
+≠
+last-applied-configuration
+```
+
+Future:
+
+```bash
+kubectl apply -f deployment.yaml
+```
+
+operations may behave differently than expected because kubectl still uses the previous applied configuration as its merge baseline.
+
+---
+
+## Production Best Practice
+
+Treat:
+
+```text
+Git Repository
+```
+
+as the source of truth.
+
+Instead of relying on:
+
+```bash
+kubectl rollout undo
+```
+
+for permanent recovery, teams usually:
+
+```text
+Git Revert
+    ↓
+Commit
+    ↓
+CI/CD
+    ↓
+Cluster Updated
+```
+
+This keeps:
+
+```text
+Git
+Deployment
+Cluster State
+```
+
+fully synchronized.
+
+---
+
+## Useful Commands
+
+View deployment revisions:
+
+```bash
+kubectl rollout history deployment nginx
+```
+
+Rollback:
+
+```bash
+kubectl rollout undo deployment nginx
+```
+
+View last applied configuration:
+
+```bash
+kubectl apply view-last-applied deployment/nginx
+kubectl apply view-last-applied deployment/nginx-deployment -o yaml > last-applied-deployment.yaml
+```
+
+---
+
+## Key Takeaway
+
+```text
+Deployment Revision History
+    =
+Used by rollout undo
+
+last-applied-configuration
+    =
+Used by kubectl apply
+
+They are completely independent mechanisms.
+```
+
+
