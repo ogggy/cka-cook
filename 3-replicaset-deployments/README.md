@@ -369,6 +369,15 @@ kubectl rollout undo deployment/nginx-deployment \
 --to-revision=1
 ```
 
+Why **Pause** and then **Resume** a Deployment Pausing a deployment is useful for temporarily halting the rollout process. Key reasons include:
+
+- Making multiple changes: If you need to adjust various aspects of your application, pausing lets you queue changes and apply them all at once upon resuming, avoiding multiple partial rollouts.
+
+- Investigating issues: If a problem arises during the rollout, pausing allows time to investigate and fix the issue before proceeding.
+
+Resuming the deployment continues the rollout from where it was paused, ensuring all pending changes are applied.
+
+
 ---
 
 # Labels and Selectors
