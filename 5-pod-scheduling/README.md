@@ -642,22 +642,574 @@ Now worker1 becomes eligible.
 
 ---
 
-# 19. Lab 4 - Affinity
+# 19. Lab 4 - Node Affinity Deep Dive
 
-Apply labels:
+## Objective
+
+Learn how Kubernetes uses **Node Affinity** to control where Pods are scheduled.
+
+This lab demonstrates:
+
+* Required Node Affinity
+* Preferred Node Affinity
+* Match Expressions
+* In / NotIn operators
+* Real-world production patterns
+* Combining Taints, Tolerations, and Node Affinity
+
+---
+
+## Prerequisites
+
+Cluster:
+
+```text
+k8s-master1
+k8s-worker1
+k8s-worker2
+```
+
+Verify nodes:
+
+```bash
+kubectl get nodes
+```
+
+---
+
+## Step 1 - Add Node Labels
+
+Assign labels to worker nodes:
 
 ```bash
 kubectl label node k8s-worker1 zone=primary
 kubectl label node k8s-worker2 zone=secondary
 ```
 
-Deploy:
+Verify:
+
+```bash
+kubectl get nodes --show-labels | grep zone
+```
+
+Expected output:
+
+```text
+k8s-worker1   zone=primary
+k8s-worker2   zone=secondary
+```
+
+---
+
+## Lab 4.1 - Required Node Affinity
+
+## Goal
+
+Force Pods to run only on nodes labeled:
+
+```text
+zone=primary
+```
+
+## Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: affinity-required
+spec:
+  replicas: 3
+
+  selector:
+    matchLabels:
+      app: affinity-required
+
+  template:
+    metadata:
+      labels:
+        app: affinity-required
+
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: zone
+                operator: In
+                values:
+                - primary
+
+      containers:
+      - name: nginx
+        image: nginx
+```
+
+Apply:
+
+```bash
+kubectl apply -f affinity-required.yaml
+```
+
+Verify:
+
+```bash
+kubectl get pods -o wide
+```
+
+Expected:
+
+```text
+affinity-required-xxx   k8s-worker1
+affinity-required-yyy   k8s-worker1
+affinity-required-zzz   k8s-worker1
+```
+
+---
+
+## Explanation
+
+`requiredDuringSchedulingIgnoredDuringExecution`
+
+means:
+
+```text
+This requirement MUST be satisfied
+before scheduling can occur.
+```
+
+If no matching node exists:
+
+```text
+Pod remains Pending
+```
+
+---
+
+## Lab 4.2 - Affinity Failure Scenario
+
+## Remove the Label
+
+```bash
+kubectl label node k8s-worker1 zone-
+```
+
+Verify:
+
+```bash
+kubectl get nodes --show-labels
+```
+
+No node should have:
+
+```text
+zone=primary
+```
+
+---
+
+## Recreate Deployment
+
+```bash
+kubectl delete deployment affinity-required
+
+kubectl apply -f affinity-required.yaml
+```
+
+---
+
+## Check Status
+
+```bash
+kubectl get pods
+```
+
+Expected:
+
+```text
+Pending
+Pending
+Pending
+```
+
+---
+
+## Investigate
+
+```bash
+kubectl describe pod <pod-name>
+```
+
+Expected scheduler event:
+
+```text
+0/3 nodes are available:
+node(s) didn't match Pod's node affinity
+```
+
+---
+
+## Key Learning
+
+Required affinity behaves like:
+
+```text
+Hard Requirement
+```
+
+No matching node:
+
+```text
+No scheduling
+```
+
+---
+
+# Restore Label
+
+```bash
+kubectl label node k8s-worker1 zone=primary
+```
+
+---
+
+## Lab 4.3 - Preferred Node Affinity
+
+## Goal
+
+Prefer worker1, but allow worker2 if needed.
+
+## Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: affinity-preferred
+
+spec:
+  replicas: 5
+
+  selector:
+    matchLabels:
+      app: affinity-preferred
+
+  template:
+    metadata:
+      labels:
+        app: affinity-preferred
+
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: zone
+                operator: In
+                values:
+                - primary
+
+      containers:
+      - name: nginx
+        image: nginx
+```
+
+Apply:
+
+```bash
+kubectl apply -f affinity-preferred.yaml
+```
+
+Verify:
+
+```bash
+kubectl get pods -o wide
+```
+
+---
+
+## Expected Behavior
+
+Most Pods should land on:
+
+```text
+k8s-worker1
+```
+
+However:
+
+```text
+k8s-worker2
+```
+
+remains a valid option.
+
+---
+
+## Key Learning
+
+Preferred affinity means:
+
+```text
+Try this node first
+```
+
+NOT:
+
+```text
+Must use this node
+```
+
+---
+
+## Lab 4.4 - Multiple Values (In Operator)
+
+## Add Labels
+
+```bash
+kubectl label node k8s-worker1 disk=ssd
+kubectl label node k8s-worker2 disk=hdd
+```
+
+Verify:
+
+```bash
+kubectl get nodes --show-labels | grep disk
+```
+
+---
+
+## Affinity Example
+
+```yaml
+matchExpressions:
+- key: disk
+  operator: In
+  values:
+  - ssd
+  - nvme
+```
+
+---
+
+## Logic
+
+Equivalent to:
+
+```text
+disk=ssd OR disk=nvme
+```
+
+---
+
+## Result
+
+```text
+worker1 (ssd)
+    -> Match
+
+worker2 (hdd)
+    -> No Match
+```
+
+---
+
+## Lab 4.5 - NotIn Operator
+
+## Example
+
+```yaml
+matchExpressions:
+- key: disk
+  operator: NotIn
+  values:
+  - hdd
+```
+
+---
+
+## Logic
+
+Equivalent to:
+
+```text
+Any node except HDD nodes
+```
+
+---
+
+## Result
+
+```text
+worker1 (ssd)
+    -> Match
+
+worker2 (hdd)
+    -> Reject
+```
+
+---
+
+## Lab 4.6 - Real Production Pattern
+
+## Goal
+
+Reserve a node for database workloads only.
+
+---
+
+## Configure Node
+
+### Label
+
+```bash
+kubectl label node k8s-worker1 workload=database
+```
+
+### Taint
+
+```bash
+kubectl taint node k8s-worker1 db=true:NoSchedule
+```
+
+Verify:
+
+```bash
+kubectl describe node k8s-worker1 | grep Taints
+```
+
+Expected:
+
+```text
+db=true:NoSchedule
+```
+
+---
+
+## Database Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-demo
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: postgres-demo
+
+  template:
+    metadata:
+      labels:
+        app: postgres-demo
+
+    spec:
+
+      tolerations:
+      - key: "db"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: workload
+                operator: In
+                values:
+                - database
+
+      containers:
+      - name: postgres
+        image: postgres:16
+```
+
+Apply:
+
+```bash
+kubectl apply -f postgres-demo.yaml
+```
+
+---
+
+## Verify Placement
+
+```bash
+kubectl get pods -o wide
+```
+
+Expected:
+
+```text
+postgres-demo-xxx   k8s-worker1
+```
+
+---
+
+## Why This Works
+
+## Taint
+
+```text
+db=true:NoSchedule
+```
+
+Node says:
+
+```text
+Keep out
+```
+
+---
+
+## Toleration
+
+```yaml
+tolerations:
+```
+
+Pod says:
+
+```text
+I am allowed to enter
+```
+
+---
+
+## Node Affinity
 
 ```yaml
 requiredDuringSchedulingIgnoredDuringExecution
 ```
 
-Verify node placement.
+Pod says:
+
+```text
+I must use a database node
+```
+
+---
+
+## Production Mental Model
+
+```text
+Taint
+    = Security Gate
+
+Toleration
+    = Access Pass
+
+Node Affinity
+    = Routing Policy
+```
 
 ---
 

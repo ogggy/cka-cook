@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-nginx
+  labels:
+    app: nginx
+spec:
+  tolerations:
+  - key: "storage"
+    operator: "Equal"
+    value: "ssd"
+    effect: "NoSchedule"
+  containers:
+  - name: nginx
+    image: nginx:latest
+    ports:
+    - containerPort: 80
